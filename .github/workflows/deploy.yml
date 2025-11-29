@@ -16,20 +16,31 @@ jobs:
       - name: Install sshpass
         run: sudo apt-get update && sudo apt-get install -y sshpass
 
+      - name: Debug secrets (they will appear masked)
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PASS: ${{ secrets.SERVER_PASS }}
+        run: |
+          echo "🔍 SERVER_IP = ${SERVER_IP}"
+          echo "🔍 SERVER_USER = ${SERVER_USER}"
+          echo "🔍 SERVER_PASS = ${SERVER_PASS}"
+
       - name: Create archive from git HEAD
         run: |
           TARFILE=deploy_package.tar.gz
           rm -f "$TARFILE"
-          # create a clean archive from the committed HEAD (no untracked files)
+          echo "Creating tar from HEAD..."
           git archive --format=tar.gz -o "$TARFILE" HEAD
 
-      - name: Copy archive to server (scp using sshpass)
+      - name: Copy archive to server
         env:
           SERVER_IP: ${{ secrets.SERVER_IP }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_PASS: ${{ secrets.SERVER_PASS }}
         run: |
           TARFILE=deploy_package.tar.gz
+          echo "Uploading archive -> ${SERVER_IP}"
           sshpass -p "${SERVER_PASS}" scp -o StrictHostKeyChecking=no "$TARFILE" "${SERVER_USER}@${SERVER_IP}:/tmp/$TARFILE"
 
       - name: Extract, install deps & restart PM2 on server
@@ -37,29 +48,34 @@ jobs:
           SERVER_IP: ${{ secrets.SERVER_IP }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_PASS: ${{ secrets.SERVER_PASS }}
-          TARGET_DIR: ${{ secrets.TARGET_DIR }}
         run: |
-          TARGET_DIR="${TARGET_DIR:-/usr/local/www/pdfcomparisontool.com---BE}"
-          TARFILE=/tmp/deploy_package.tar.gz
+          STATIC_TARGET_DIR="/usr/local/www/pdfcomparisontool.com---BE"
+          TARFILE="/tmp/deploy_package.tar.gz"
+
+          echo "Deploy target directory: $STATIC_TARGET_DIR"
 
           sshpass -p "${SERVER_PASS}" ssh -o StrictHostKeyChecking=no "${SERVER_USER}@${SERVER_IP}" \
             "bash -lc 'set -e
-              echo \"Deploying to: $TARGET_DIR\";
-              mkdir -p \"$TARGET_DIR\";
-              tar -xzf \"$TARFILE\" -C \"$TARGET_DIR\";
+              echo \"Deploying to: $STATIC_TARGET_DIR\";
+              mkdir -p \"$STATIC_TARGET_DIR\";
+              tar -xzf \"$TARFILE\" -C \"$STATIC_TARGET_DIR\";
               rm -f \"$TARFILE\";
-              cd \"$TARGET_DIR\";
+
+              cd \"$STATIC_TARGET_DIR\";
+              echo \"Installing dependencies...\";
               if command -v npm >/dev/null 2>&1; then
                 npm ci --production || npm install --production;
               fi;
+
               APP_NAME=pdfcompare;
-              # if pm2 knows the app, try restart
+
+              echo \"Restarting PM2...\";
               if pm2 describe \"\$APP_NAME\" >/dev/null 2>&1; then
                 pm2 restart \"\$APP_NAME\" || true;
               fi;
-              # ensure app running (start fallback)
+
               pm2 restart \"\$APP_NAME\" || PORT=5001 pm2 start app.js --name \"\$APP_NAME\";
-              pm2 save
+              pm2 save;
             '"
 
       - name: Cleanup local archive
